@@ -154,9 +154,8 @@ pacman --sync --refresh --sysupgrade --needed --noconfirm --disable-download-tim
 	subconverter-bin \
 	urlencode \
 	docker-systemctl-replacement-git \
-	curl \
-	grep \
 	rclone \
+	base-devel \
 	&& break
 done || {
 create_mail_message "Failed to install build environment."
