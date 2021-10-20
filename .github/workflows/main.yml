@@ -1,0 +1,48 @@
+name: makepkg CI
+
+on: 
+  release:
+    types: [published]
+  push:
+    tags:
+    - 'v*'
+   # branches: 
+   # - master
+  schedule:
+    - cron: 00 18 * * *
+  watch:
+    types: [started]
+
+jobs:
+  build-package:
+    runs-on: ubuntu-latest
+    name: Build
+    if: github.event.repository.owner.id == github.event.sender.id
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Run on Archlinux
+      uses: atomlong/run-on-arch-action@alarm
+      id: runcmd
+      with:
+        arch: "x86_64"
+        githubToken: ${{ github.token }}
+        rcloneConfig: ${{ secrets.RCLONE_CONF }}
+        deployPath: ${{ secrets.DEPLOY_PATH }}
+        customRepos: ${{ secrets.CUSTOM_REPOS }}
+        run: |
+          export PACMAN_REPO=${{ matrix.repo }}
+          bash .github/workflows/ci-build.sh
+          exit 0
+    - name: Send build result via mail
+      uses: atomlong/send-mail-action@v3.5.0
+      if: ${{ steps.runcmd.outputs.message != '' }}
+      with:
+        server_address: ${{secrets.MAIL_HOST}}
+        server_port: ${{secrets.MAIL_PORT}}
+        username: ${{secrets.MAIL_USERNAME}}
+        password: ${{secrets.MAIL_PASSWORD}}
+        subject: Github Actions job of ${{github.repository}} result
+        html_body: ${{ steps.runcmd.outputs.message }}
+        to: ${{secrets.MAIL_TO}}
+        from: Github
