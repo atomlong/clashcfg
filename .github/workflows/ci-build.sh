@@ -106,6 +106,7 @@ local conv_root=$(dirname $(readlink -f $(which subconverter)))
 local mcp=$(grep -Po '^\s*managed_config_prefix:\s*"\K[^"]+' ${conv_root}/pref.yml)
 local URL=$(echo $(cat source.txt) | sed -r 's/\s+/|/g' | tr -d '\n' | urlencode)
 local SUB="${mcp}/sub?target=clash&url=${URL}"
+mkdir -pv ${ARTIFACTS_PATH}
 curl "${SUB}" -o ${ARTIFACTS_PATH}/config.yml
 }
 
@@ -113,6 +114,7 @@ curl "${SUB}" -o ${ARTIFACTS_PATH}/config.yml
 deploy_artifacts()
 {
 [ -n "${DEPLOY_PATH}" ] || { echo "You must set DEPLOY_PATH firstly."; return 1; }
+[ -d ${ARTIFACTS_PATH} ] && [ "$(ls -A ${ARTIFACTS_PATH})" ] || { echo "No artifacts to deploy."; return 1; }
 echo "Uploading new files to remote server ..."
 rclone copy ${ARTIFACTS_PATH} ${DEPLOY_PATH} --copy-links
 }
@@ -151,11 +153,11 @@ add_archive_repo
 
 for (( i=0; i<5; i++ )); do
 pacman --sync --refresh --sysupgrade --needed --noconfirm --disable-download-timeout \
+	base-devel \
+	rclone \
 	subconverter-bin \
 	urlencode \
 	docker-systemctl-replacement-git \
-	rclone \
-	base-devel \
 	&& break
 done || {
 create_mail_message "Failed to install build environment."
