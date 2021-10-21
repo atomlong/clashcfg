@@ -97,17 +97,97 @@ printf "Server = ${archive_repo_sed_date}\n" >> /etc/pacman.d/mirrorlist
 done
 }
 
+# hex string
+hexstring()
+{
+local sedpat=$(
+for ((i=0x80; i<0xFF; i++)); do
+printf ';s/\\x%02x/\\\\x%02x/g' ${i} ${i}
+done
+)
+sedpat="${sedpat:1}"
+printf "${1}" | sed "${sedpat}"
+}
+
+# Rename a node with country/area info
+rename_node()
+{
+[ "$#" == 1 ] || { echo "Usage: rename_node <cfg_file>"; return 1; }
+local cfg_file="${1}"
+local x i=0
+local server port area_d oname nname
+declare -A ALL
+declare -A area_zh
+[ -f "${cfg_file}" ] || { echo "No file ${cfg_file}"; return 1; }
+while read x; do ALL[${i}]="${x}"; ((i++)); done <<< $(grep -Po '^\s*-\s*\K\{\s*name:.*\}\s*$' ${cfg_file})
+x="${i}"
+[ "${x}" == "0" ] && return 0
+
+echo "Renaming ${x} nodes ..."
+source area_zh.txt
+for ((i=0; i<x; i++)); do
+oname=$(grep -Po '\{\s*name:\s*\K[^,]+(?=\s*,)' <<< "${ALL[${i}]}")
+server=$(grep -Po ' server:\s*\K\S+(?=\s*,)' <<< "${ALL[${i}]}")
+port=$(grep -Po ' port:\s*\K\S+(?=\s*,)' <<< "${ALL[${i}]}")
+area_d=$(geoiplookup ${server} | grep -Po '^[^,]+\s\K\w+')
+nname="${area_zh[${area_d}]}-${server}:${port}"
+printf "\r[$((i+1))/${x}]${nname}"
+oname=$(hexstring "${oname}")
+sed -i -r -e "s/^(\s*-\s*\{\s*name:\s*)${oname}(\s*,.*)$/\1${nname}\2/" \
+	-e "s/^(\s*- )${oname}(\s*)$/\1${nname}\2/g" \
+    ${cfg_file}
+done
+echo "Done"
+return 0
+}
+
+# convert to clash config
+conv_to_clash()
+{
+[ "$#" == 2 ] || {  echo "Usage: conv_to_clash <url> <savefile>"; return 1; }
+[ $(systemctl is-active subconverter) == "active" ] || systemctl start subconverter || { echo "Failed to start subconverter"; return 1; }
+
+local conv_root=$(dirname $(readlink -f $(which subconverter)))
+local mcp=$(grep -Po '^\s*managed_config_prefix:\s*"\K[^"]+' ${conv_root}/pref.yml)
+local URL=$(printf "${1}" | urlencode)
+local SUB="${mcp}/sub?target=clash&url=${URL}"
+local savefile="${2}"
+local savedir=$(dirname "${savefile}")
+
+echo "Generating ${savefile} ..."
+[ -d "${savedir}" ] || mkdir -pv "${savedir}"
+rm -vf "${savefile}"
+
+curl --silent --max-time 3600 --connect-timeout 3600 --expect100-timeout 3600 "${SUB}" -o "${savefile}"
+[ -s "${savefile}" ] && {
+echo "Done"
+return 0
+} || {
+echo "Failed"
+return 1
+}
+}
+
 # Build clash config file
 build_clash()
 {
-[ -f source.txt ] || { echo "No source.txt file"; exit 1; }
-systemctl.py is-active subconverter || systemctl.py start subconverter || { echo "Failed to start subconverter"; exit 1; }
-local conv_root=$(dirname $(readlink -f $(which subconverter)))
-local mcp=$(grep -Po '^\s*managed_config_prefix:\s*"\K[^"]+' ${conv_root}/pref.yml)
-local URL=$(echo $(cat source.txt) | sed -r 's/\s+/|/g' | tr -d '\n' | urlencode)
-local SUB="${mcp}/sub?target=clash&url=${URL}"
-mkdir -pv ${ARTIFACTS_PATH}
-curl "${SUB}" -o ${ARTIFACTS_PATH}/config.yml
+[ -f source.txt ] || { echo "No source.txt file"; return 1; }
+local p i=1
+for p in $(cat source.txt); do
+echo "Downloading node info from ${p} ..."
+curl -sL "${p}" -o ${i}.txt && {
+URL+="|${PWD}/${i}.txt"
+((i++))
+} || {
+rm -vf ${i}.txt
+}
+done
+
+[ -n "${URL}" ] || { echo "Cannot find node info."; return 1; }
+
+conv_to_clash "${URL:1}" config.yml || return 1
+rename_node config.yml || return 1
+conv_to_clash "${PWD}/config.yml" "${ARTIFACTS_PATH}/clash_all.yml"
 }
 
 # deploy artifacts
@@ -155,6 +235,7 @@ for (( i=0; i<5; i++ )); do
 pacman --sync --refresh --sysupgrade --needed --noconfirm --disable-download-timeout \
 	base-devel \
 	rclone \
+	geoip \
 	subconverter-bin \
 	urlencode \
 	docker-systemctl-replacement-git \
